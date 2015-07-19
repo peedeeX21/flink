@@ -16,27 +16,10 @@
  * limitations under the License.
  */
 
-package org.apache.flink.runtime.jobmanager.accumulators;
+package org.apache.flink.runtime.jobgraph.tasks;
 
-import java.util.HashMap;
-import java.util.Map;
 
-import org.apache.flink.api.common.accumulators.Accumulator;
-import org.apache.flink.api.common.accumulators.AccumulatorHelper;
-
-/**
- * Simple class wrapping a map of accumulators for a single job. Just for better
- * handling.
- */
-public class JobAccumulators {
-
-	private final Map<String, Accumulator<?, ?>> accumulators = new HashMap<String, Accumulator<?, ?>>();
-
-	public Map<String, Accumulator<?, ?>> getAccumulators() {
-		return this.accumulators;
-	}
-
-	public void processNew(Map<String, Accumulator<?, ?>> newAccumulators) {
-		AccumulatorHelper.mergeInto(this.accumulators, newAccumulators);
-	}
+public interface CheckpointNotificationOperator {
+	
+	void notifyCheckpointComplete(long checkpointId) throws Exception;
 }
