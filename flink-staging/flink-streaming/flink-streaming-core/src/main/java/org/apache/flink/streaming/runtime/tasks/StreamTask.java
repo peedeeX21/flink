@@ -31,7 +31,6 @@ import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.runtime.accumulators.AccumulatorRegistry;
-import org.apache.flink.runtime.event.task.TaskEvent;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.apache.flink.runtime.jobgraph.tasks.CheckpointNotificationOperator;
@@ -73,12 +72,12 @@ public abstract class StreamTask<OUT, O extends StreamOperator<OUT>> extends Abs
 	protected StreamingRuntimeContext headContext;
 
 	protected ClassLoader userClassLoader;
-
-	private EventListener<TaskEvent> superstepListener;
+	
+	private EventListener<CheckpointBarrier> checkpointBarrierListener;
 
 	public StreamTask() {
 		streamOperator = null;
-		superstepListener = new SuperstepEventListener();
+		checkpointBarrierListener = new CheckpointBarrierListener();
 		contexts = new ArrayList<StreamingRuntimeContext>();
 	}
 
@@ -106,7 +105,7 @@ public abstract class StreamTask<OUT, O extends StreamOperator<OUT>> extends Abs
 			streamOperator.setup(outputHandler.getOutput(), headContext);
 		}
 
-		hasChainedOperators = !(outputHandler.getChainedOperators().size() == 1);
+		hasChainedOperators = outputHandler.getChainedOperators().size() != 1;
 	}
 
 	public String getName() {
@@ -171,7 +170,9 @@ public abstract class StreamTask<OUT, O extends StreamOperator<OUT>> extends Abs
 
 	protected void openOperator() throws Exception {
 		for (StreamOperator<?> operator : outputHandler.getChainedOperators()) {
-			operator.open(getTaskConfiguration());
+			if (operator != null) {
+				operator.open(getTaskConfiguration());
+			}
 		}
 	}
 
@@ -179,7 +180,10 @@ public abstract class StreamTask<OUT, O extends StreamOperator<OUT>> extends Abs
 		// We need to close them first to last, since upstream operators in the chain might emit
 		// elements in their close methods.
 		for (int i = outputHandler.getChainedOperators().size()-1; i >= 0; i--) {
-			outputHandler.getChainedOperators().get(i).close();
+			StreamOperator<?> operator = outputHandler.getChainedOperators().get(i);
+			if (operator != null) {
+				operator.close();
+			}
 		}
 	}
 
@@ -194,8 +198,8 @@ public abstract class StreamTask<OUT, O extends StreamOperator<OUT>> extends Abs
 		this.isRunning = false;
 	}
 
-	public EventListener<TaskEvent> getSuperstepListener() {
-		return this.superstepListener;
+	public EventListener<CheckpointBarrier> getCheckpointBarrierListener() {
+		return this.checkpointBarrierListener;
 	}
 
 	// ------------------------------------------------------------------------
@@ -206,7 +210,7 @@ public abstract class StreamTask<OUT, O extends StreamOperator<OUT>> extends Abs
 	@Override
 	public void setInitialState(StateHandle<Serializable> stateHandle) throws Exception {
 
-		// We retrieve end restore the states for the chained oeprators.
+		// We retrieve end restore the states for the chained operators.
 		List<Tuple2<StateHandle<Serializable>, Map<String, PartitionedStateHandle>>> chainedStates = (List<Tuple2<StateHandle<Serializable>, Map<String, PartitionedStateHandle>>>) stateHandle.getState();
 
 		// We restore all stateful chained operators
@@ -274,22 +278,18 @@ public abstract class StreamTask<OUT, O extends StreamOperator<OUT>> extends Abs
 
 	}
 
-	@SuppressWarnings({ "unchecked", "rawtypes" })
+	@SuppressWarnings("rawtypes")
 	@Override
 	public void notifyCheckpointComplete(long checkpointId) throws Exception {
 		// we do nothing here so far. this should call commit on the source function, for example
 		synchronized (checkpointLock) {
-			if (streamOperator instanceof StatefulStreamOperator) {
-				((StatefulStreamOperator) streamOperator).notifyCheckpointComplete(checkpointId);
-			}
 
-			if (hasChainedOperators) {
-				for (StreamOperator<?> chainedOperator : outputHandler.getChainedOperators()) {
-					if (chainedOperator instanceof StatefulStreamOperator) {
-						((StatefulStreamOperator) chainedOperator).notifyCheckpointComplete(checkpointId);
-					}
+			for (StreamOperator<?> chainedOperator : outputHandler.getChainedOperators()) {
+				if (chainedOperator instanceof StatefulStreamOperator) {
+					((StatefulStreamOperator) chainedOperator).notifyCheckpointComplete(checkpointId);
 				}
 			}
+
 		}
 	}
 
@@ -305,13 +305,12 @@ public abstract class StreamTask<OUT, O extends StreamOperator<OUT>> extends Abs
 
 	// ------------------------------------------------------------------------
 
-	private class SuperstepEventListener implements EventListener<TaskEvent> {
+	private class CheckpointBarrierListener implements EventListener<CheckpointBarrier> {
 
 		@Override
-		public void onEvent(TaskEvent event) {
+		public void onEvent(CheckpointBarrier barrier) {
 			try {
-				StreamingSuperstep sStep = (StreamingSuperstep) event;
-				triggerCheckpoint(sStep.getId(), sStep.getTimestamp());
+				triggerCheckpoint(barrier.getId(), barrier.getTimestamp());
 			}
 			catch (Exception e) {
 				throw new RuntimeException("Error triggering a checkpoint as the result of receiving checkpoint barrier", e);

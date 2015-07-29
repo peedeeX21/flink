@@ -80,8 +80,15 @@ class LocalFlinkMiniCluster(userConfiguration: Configuration,
     val (jobManager, archiver) = JobManager.startJobManagerActors(config, system, streamingMode)
     
     if (config.getBoolean(ConfigConstants.LOCAL_INSTANCE_MANAGER_START_WEBSERVER, false)) {
-      val webServer = new WebInfoServer(configuration, jobManager, archiver)
-      webServer.start()
+      if (userConfiguration.getBoolean(ConfigConstants.JOB_MANAGER_NEW_WEB_FRONTEND_KEY, false)) {
+        // new web frontend
+        JobManager.startWebRuntimeMonitor(userConfiguration, jobManager, archiver)
+      }
+      else {
+        // old web frontend
+        val webServer = new WebInfoServer(configuration, jobManager, archiver)
+        webServer.start()
+      }
     }
     jobManager
   }
@@ -170,7 +177,7 @@ class LocalFlinkMiniCluster(userConfiguration: Configuration,
   }
 
   def setMemory(config: Configuration): Unit = {
-    // set this only if no memory was preconfigured
+    // set this only if no memory was pre-configured
     if (config.getInteger(ConfigConstants.TASK_MANAGER_MEMORY_SIZE_KEY, -1) == -1) {
 
       val bufferSizeNew: Int = config.getInteger(
@@ -234,12 +241,5 @@ class LocalFlinkMiniCluster(userConfiguration: Configuration,
 }
 
 object LocalFlinkMiniCluster {
-  val LOG = LoggerFactory.getLogger(classOf[LocalFlinkMiniCluster])
-
-  def main(args: Array[String]) {
-    var conf = new Configuration;
-    conf.setInteger(ConfigConstants.LOCAL_INSTANCE_MANAGER_NUMBER_TASK_MANAGER, 4)
-    conf.setBoolean(ConfigConstants.LOCAL_INSTANCE_MANAGER_START_WEBSERVER, true)
-    var cluster = new LocalFlinkMiniCluster(conf, true)
-  }
+//  val LOG = LoggerFactory.getLogger(classOf[LocalFlinkMiniCluster])
 }

@@ -39,6 +39,7 @@ import org.apache.flink.runtime.operators.util.TaskConfig;
 import org.apache.flink.runtime.state.StateHandleProvider;
 import org.apache.flink.streaming.api.state.PartitionedStreamOperatorState;
 import org.apache.flink.streaming.api.state.StreamOperatorState;
+import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 
 /**
  * Implementation of the {@link RuntimeContext}, created by runtime stream UDF
@@ -52,6 +53,7 @@ public class StreamingRuntimeContext extends RuntimeUDFContext {
 	private final List<PartitionedStreamOperatorState> partitionedStates;
 	private final KeySelector<?, ?> statePartitioner;
 	private final StateHandleProvider<Serializable> provider;
+	private final ClassLoader cl;
 
 	@SuppressWarnings("unchecked")
 	public StreamingRuntimeContext(String name, Environment env, ClassLoader userCodeClassLoader,
@@ -64,6 +66,7 @@ public class StreamingRuntimeContext extends RuntimeUDFContext {
 		this.states = new HashMap<String, StreamOperatorState>();
 		this.partitionedStates = new LinkedList<PartitionedStreamOperatorState>();
 		this.provider = (StateHandleProvider<Serializable>) provider;
+		this.cl = userCodeClassLoader;
 	}
 
 	/**
@@ -140,10 +143,10 @@ public class StreamingRuntimeContext extends RuntimeUDFContext {
 	public StreamOperatorState createRawState(boolean partitioned) {
 		if (partitioned) {
 			if (statePartitioner != null) {
-				return new PartitionedStreamOperatorState(provider, statePartitioner);
+				return new PartitionedStreamOperatorState(provider, statePartitioner, cl);
 			} else {
 				throw new RuntimeException(
-						"A partitioning key must be provided for pastitioned state.");
+						"Partitioned state can only be used with KeyedDataStreams.");
 			}
 		} else {
 			return new StreamOperatorState(provider);
@@ -167,10 +170,10 @@ public class StreamingRuntimeContext extends RuntimeUDFContext {
 	 *            Next input of the operator.
 	 */
 	@SuppressWarnings("unchecked")
-	public void setNextInput(Object nextRecord) {
+	public void setNextInput(StreamRecord<?> nextRecord) {
 		if (statePartitioner != null) {
 			for (PartitionedStreamOperatorState state : partitionedStates) {
-				state.setCurrentInput(nextRecord);
+				state.setCurrentInput(nextRecord.getValue());
 			}
 		}
 	}
