@@ -18,12 +18,10 @@
 
 package org.apache.flink.runtime.webmonitor.handlers;
 
-import akka.actor.ActorRef;
-import akka.pattern.Patterns;
-import akka.util.Timeout;
-
+import org.apache.flink.runtime.instance.ActorGateway;
 import org.apache.flink.runtime.messages.webmonitor.RequestStatusWithJobIDsOverview;
 import org.apache.flink.runtime.messages.webmonitor.StatusWithJobIDsOverview;
+import org.apache.flink.runtime.webmonitor.JobManagerArchiveRetriever;
 import org.apache.flink.runtime.webmonitor.JsonFactory;
 import org.apache.flink.runtime.webmonitor.WebRuntimeMonitor;
 
@@ -39,30 +37,35 @@ import java.util.Map;
  */
 public class RequestOverviewHandler implements  RequestHandler, RequestHandler.JsonResponse {
 	
-	private final ActorRef jobManager;
+	private final JobManagerArchiveRetriever retriever;
 	
 	private final FiniteDuration timeout;
 	
 	
-	public RequestOverviewHandler(ActorRef jobManager) {
-		this(jobManager, WebRuntimeMonitor.DEFAULT_REQUEST_TIMEOUT);
+	public RequestOverviewHandler(JobManagerArchiveRetriever retriever) {
+		this(retriever, WebRuntimeMonitor.DEFAULT_REQUEST_TIMEOUT);
 	}
 	
-	public RequestOverviewHandler(ActorRef jobManager, FiniteDuration timeout) {
-		if (jobManager == null || timeout == null) {
+	public RequestOverviewHandler(JobManagerArchiveRetriever retriever, FiniteDuration timeout) {
+		if (retriever == null || timeout == null) {
 			throw new NullPointerException();
 		}
-		this.jobManager = jobManager;
+		this.retriever = retriever;
 		this.timeout = timeout;
 	}
 	
 	@Override
 	public String handleRequest(Map<String, String> params) throws Exception {
 		try {
-			Timeout to = new Timeout(timeout); 
-			Future<Object> future = Patterns.ask(jobManager, RequestStatusWithJobIDsOverview.getInstance(), to);
-			StatusWithJobIDsOverview result = (StatusWithJobIDsOverview) Await.result(future, timeout);
-			return JsonFactory.generateOverviewWithJobIDsJSON(result);
+			ActorGateway jobManager = retriever.getJobManagerGateway();
+
+			if (jobManager != null) {
+				Future<Object> future = jobManager.ask(RequestStatusWithJobIDsOverview.getInstance(), timeout);
+				StatusWithJobIDsOverview result = (StatusWithJobIDsOverview) Await.result(future, timeout);
+				return JsonFactory.generateOverviewWithJobIDsJSON(result);
+			} else {
+				throw new Exception("No connection to the leading job manager.");
+			}
 		}
 		catch (Exception e) {
 			throw new Exception("Failed to fetch the status overview: " + e.getMessage(), e);

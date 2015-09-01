@@ -29,6 +29,7 @@ import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.execution.librarycache.LibraryCacheManager;
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
 import org.apache.flink.runtime.filecache.FileCache;
+import org.apache.flink.runtime.instance.ActorGateway;
 import org.apache.flink.runtime.instance.DummyActorGateway;
 import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.network.NetworkEnvironment;
@@ -48,7 +49,6 @@ import scala.concurrent.duration.FiniteDuration;
 import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
@@ -88,7 +88,11 @@ public class TaskAsyncCallTest {
 			triggerLatch.await();
 			
 			assertFalse(task.isCanceledOrFailed());
-			assertEquals(ExecutionState.RUNNING, task.getExecutionState());
+
+			ExecutionState currentState = task.getExecutionState();
+			if (currentState != ExecutionState.RUNNING && currentState != ExecutionState.FINISHED) {
+				fail("Task should be RUNNING or FINISHED, but is " + currentState);
+			}
 			
 			task.cancelExecution();
 			task.getExecutingThread().join();
@@ -115,7 +119,10 @@ public class TaskAsyncCallTest {
 			triggerLatch.await();
 
 			assertFalse(task.isCanceledOrFailed());
-			assertEquals(ExecutionState.RUNNING, task.getExecutionState());
+			ExecutionState currentState = task.getExecutionState();
+			if (currentState != ExecutionState.RUNNING && currentState != ExecutionState.FINISHED) {
+				fail("Task should be RUNNING or FINISHED, but is " + currentState);
+			}
 
 			task.cancelExecution();
 			task.getExecutingThread().join();
@@ -127,7 +134,6 @@ public class TaskAsyncCallTest {
 	}
 	
 	private static Task createTask() {
-		
 		LibraryCacheManager libCache = mock(LibraryCacheManager.class);
 		when(libCache.getClassLoader(any(JobID.class))).thenReturn(ClassLoader.getSystemClassLoader());
 		
@@ -148,16 +154,18 @@ public class TaskAsyncCallTest {
 				Collections.<BlobKey>emptyList(),
 				0);
 
+		ActorGateway taskManagerGateway = DummyActorGateway.INSTANCE;
 		return new Task(tdd,
 				mock(MemoryManager.class),
 				mock(IOManager.class),
 				networkEnvironment,
 				mock(BroadcastVariableManager.class),
-				DummyActorGateway.INSTANCE,
+				taskManagerGateway,
 				DummyActorGateway.INSTANCE,
 				new FiniteDuration(60, TimeUnit.SECONDS),
 				libCache,
-				mock(FileCache.class));
+				mock(FileCache.class),
+				new TaskManagerRuntimeInfo("localhost", new Configuration()));
 	}
 	
 	public static class CheckpointsInOrderInvokable extends AbstractInvokable

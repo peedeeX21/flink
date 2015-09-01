@@ -19,6 +19,7 @@ package org.apache.flink.streaming.api.environment;
 
 import com.esotericsoftware.kryo.Serializer;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.Lists;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.InvalidProgramException;
 import org.apache.flink.api.common.JobExecutionResult;
@@ -42,9 +43,11 @@ import org.apache.flink.client.program.Client;
 import org.apache.flink.client.program.Client.OptimizerPlanEnvironment;
 import org.apache.flink.client.program.ContextEnvironment;
 import org.apache.flink.client.program.PackagedProgram.PreviewPlanEnvironment;
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.runtime.state.FileStateHandle;
 import org.apache.flink.runtime.state.StateHandleProvider;
+import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.functions.source.FileMonitoringFunction;
@@ -59,8 +62,9 @@ import org.apache.flink.streaming.api.functions.source.SocketTextStreamFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.api.functions.source.StatefulSequenceSource;
 import org.apache.flink.streaming.api.graph.StreamGraph;
-import org.apache.flink.streaming.api.operators.StreamOperator;
+import org.apache.flink.streaming.api.graph.StreamGraphGenerator;
 import org.apache.flink.streaming.api.operators.StreamSource;
+import org.apache.flink.streaming.api.transformations.StreamTransformation;
 import org.apache.flink.types.StringValue;
 import org.apache.flink.util.SplittableIterator;
 
@@ -85,20 +89,24 @@ public abstract class StreamExecutionEnvironment {
 
 	private ExecutionConfig config = new ExecutionConfig();
 
-	protected static StreamExecutionEnvironment currentEnvironment;
+	protected List<StreamTransformation<?>> transformations = Lists.newArrayList();
 
-	protected StreamGraph streamGraph;
+	protected boolean isChainingEnabled = true;
+
+	protected long checkpointInterval = -1; // disabled
+
+	protected CheckpointingMode checkpointingMode = null;
+
+	protected boolean forceCheckpointing = false;
+
+	protected StateHandleProvider<?> stateHandleProvider;
+
+	/** The environment of the context (local by default, cluster if invoked through command line) */
+	private static StreamExecutionEnvironmentFactory contextEnvironmentFactory;
 
 	// --------------------------------------------------------------------------------------------
 	// Constructor and Properties
 	// --------------------------------------------------------------------------------------------
-
-	/**
-	 * Constructor for creating StreamExecutionEnvironment
-	 */
-	protected StreamExecutionEnvironment() {
-		streamGraph = new StreamGraph(this);
-	}
 
 	/**
 	 * Gets the config object.
@@ -220,75 +228,143 @@ public abstract class StreamExecutionEnvironment {
 	 * @return StreamExecutionEnvironment with chaining disabled.
 	 */
 	public StreamExecutionEnvironment disableOperatorChaining() {
-		streamGraph.setChaining(false);
+		this.isChainingEnabled = false;
 		return this;
 	}
 
 	/**
-	 * Method for enabling fault-tolerance. Activates monitoring and backup of
-	 * streaming operator states.
-	 * <p/>
-	 * <p/>
-	 * Setting this option assumes that the job is used in production and thus
-	 * if not stated explicitly otherwise with calling with the
-	 * {@link #setNumberOfExecutionRetries(int numberOfExecutionRetries)} method
-	 * in case of failure the job will be resubmitted to the cluster
-	 * indefinitely.
+	 * Returns whether operator chaining is enabled.
 	 *
-	 * @param interval
-	 * 		Time interval between state checkpoints in millis
+	 * @return {@code true} if chaining is enabled, false otherwise.
+	 */
+	public boolean isChainingEnabled() {
+		return isChainingEnabled;
+	}
+
+	// ------------------------------------------------------------------------
+	//  Checkpointing Settings
+	// ------------------------------------------------------------------------
+	
+	/**
+	 * Enables checkpointing for the streaming job. The distributed state of the streaming
+	 * dataflow will be periodically snapshotted. In case of a failure, the streaming
+	 * dataflow will be restarted from the latest completed checkpoint. This method selects
+	 * {@link CheckpointingMode#EXACTLY_ONCE} guarantees.
+	 * 
+	 * <p>The job draws checkpoints periodically, in the given interval. The state will be
+	 * stored in the configured state backend.</p>
+	 * 
+	 * <p>NOTE: Checkpointing iterative streaming dataflows in not properly supported at
+	 * the moment. For that reason, iterative jobs will not be started if used
+	 * with enabled checkpointing. To override this mechanism, use the 
+	 * {@link #enableCheckpointing(long, CheckpointingMode, boolean)} method.</p>
+	 *
+	 * @param interval Time interval between state checkpoints in milliseconds.
 	 */
 	public StreamExecutionEnvironment enableCheckpointing(long interval) {
-		streamGraph.setCheckpointingEnabled(true);
-		streamGraph.setCheckpointingInterval(interval);
+		return enableCheckpointing(interval, CheckpointingMode.EXACTLY_ONCE);
+	}
+
+	/**
+	 * Enables checkpointing for the streaming job. The distributed state of the streaming
+	 * dataflow will be periodically snapshotted. In case of a failure, the streaming
+	 * dataflow will be restarted from the latest completed checkpoint.
+	 *
+	 * <p>The job draws checkpoints periodically, in the given interval. The system uses the
+	 * given {@link CheckpointingMode} for the checkpointing ("exactly once" vs "at least once").
+	 * The state will be stored in the configured state backend.</p>
+	 *
+	 * <p>NOTE: Checkpointing iterative streaming dataflows in not properly supported at
+	 * the moment. For that reason, iterative jobs will not be started if used
+	 * with enabled checkpointing. To override this mechanism, use the 
+	 * {@link #enableCheckpointing(long, CheckpointingMode, boolean)} method.</p>
+	 *
+	 * @param interval 
+	 *             Time interval between state checkpoints in milliseconds.
+	 * @param mode 
+	 *             The checkpointing mode, selecting between "exactly once" and "at least once" guaranteed.
+	 */
+	public StreamExecutionEnvironment enableCheckpointing(long interval, CheckpointingMode mode) {
+		if (mode == null) {
+			throw new NullPointerException("checkpoint mode must not be null");
+		}
+		if (interval <= 0) {
+			throw new IllegalArgumentException("the checkpoint interval must be positive");
+		}
+
+		this.checkpointInterval = interval;
+		this.checkpointingMode = mode;
 		return this;
 	}
 	
 	/**
-	 * Method for force-enabling fault-tolerance. Activates monitoring and
-	 * backup of streaming operator states even for jobs containing iterations.
-	 * 
-	 * Please note that the checkpoint/restore guarantees for iterative jobs are
-	 * only best-effort at the moment. Records inside the loops may be lost
-	 * during failure.
-	 * <p/>
-	 * <p/>
-	 * Setting this option assumes that the job is used in production and thus
-	 * if not stated explicitly otherwise with calling with the
-	 * {@link #setNumberOfExecutionRetries(int numberOfExecutionRetries)} method
-	 * in case of failure the job will be resubmitted to the cluster
-	 * indefinitely.
+	 * Enables checkpointing for the streaming job. The distributed state of the streaming
+	 * dataflow will be periodically snapshotted. In case of a failure, the streaming
+	 * dataflow will be restarted from the latest completed checkpoint.
+	 *
+	 * <p>The job draws checkpoints periodically, in the given interval. The state will be
+	 * stored in the configured state backend.</p>
+	 *
+	 * <p>NOTE: Checkpointing iterative streaming dataflows in not properly supported at
+	 * the moment. If the "force" parameter is set to true, the system will execute the
+	 * job nonetheless.</p>
 	 * 
 	 * @param interval
-	 *            Time interval between state checkpoints in millis
+	 *            Time interval between state checkpoints in millis.
+	 * @param mode
+	 *            The checkpointing mode, selecting between "exactly once" and "at least once" guaranteed.
 	 * @param force
-	 *            If true checkpointing will be enabled for iterative jobs as
-	 *            well
+	 *            If true checkpointing will be enabled for iterative jobs as well.
 	 */
 	@Deprecated
-	public StreamExecutionEnvironment enableCheckpointing(long interval, boolean force) {
-		streamGraph.setCheckpointingEnabled(true);
-		streamGraph.setCheckpointingInterval(interval);
-		if (force) {
-			streamGraph.forceCheckpoint();
-		}
+	public StreamExecutionEnvironment enableCheckpointing(long interval, CheckpointingMode mode, boolean force) {
+		this.enableCheckpointing(interval, mode);
+
+		this.forceCheckpointing = force;
 		return this;
 	}
 
 	/**
-	 * Method for enabling fault-tolerance. Activates monitoring and backup of
-	 * streaming operator states.
-	 * <p/>
-	 * <p/>
-	 * Setting this option assumes that the job is used in production and thus
-	 * if not stated explicitly otherwise with calling with the
-	 * {@link #setNumberOfExecutionRetries(int numberOfExecutionRetries)} method
-	 * in case of failure the job will be resubmitted to the cluster
-	 * indefinitely.
+	 * Enables checkpointing for the streaming job. The distributed state of the streaming
+	 * dataflow will be periodically snapshotted. In case of a failure, the streaming
+	 * dataflow will be restarted from the latest completed checkpoint. This method selects
+	 * {@link CheckpointingMode#EXACTLY_ONCE} guarantees.
+	 *
+	 * <p>The job draws checkpoints periodically, in the default interval. The state will be
+	 * stored in the configured state backend.</p>
+	 *
+	 * <p>NOTE: Checkpointing iterative streaming dataflows in not properly supported at
+	 * the moment. For that reason, iterative jobs will not be started if used
+	 * with enabled checkpointing. To override this mechanism, use the 
+	 * {@link #enableCheckpointing(long, CheckpointingMode, boolean)} method.</p>
 	 */
 	public StreamExecutionEnvironment enableCheckpointing() {
-		streamGraph.setCheckpointingEnabled(true);
+		enableCheckpointing(500, CheckpointingMode.EXACTLY_ONCE);
 		return this;
+	}
+
+	/**
+	 * Returns the checkpointing interval or -1 if checkpointing is disabled.
+	 *
+	 * @return The checkpointing interval or -1
+	 */
+	public long getCheckpointInterval() {
+		return checkpointInterval;
+	}
+
+
+	/**
+	 * Returns whether checkpointing is force-enabled.
+	 */
+	public boolean isForceCheckpointing() {
+		return forceCheckpointing;
+	}
+
+	/**
+	 * Returns the {@link CheckpointingMode}.
+	 */
+	public CheckpointingMode getCheckpointingMode() {
+		return checkpointingMode;
 	}
 
 	/**
@@ -300,8 +376,19 @@ public abstract class StreamExecutionEnvironment {
 	 * 
 	 */
 	public StreamExecutionEnvironment setStateHandleProvider(StateHandleProvider<?> provider) {
-		streamGraph.setStateHandleProvider(provider);
+		this.stateHandleProvider = provider;
 		return this;
+	}
+
+	/**
+	 * Returns the {@link org.apache.flink.runtime.state.StateHandle}
+	 *
+	 * @see #setStateHandleProvider(org.apache.flink.runtime.state.StateHandleProvider)
+	 *
+	 * @return The StateHandleProvider
+	 */
+	public StateHandleProvider<?> getStateHandleProvider() {
+		return stateHandleProvider;
 	}
 
 	/**
@@ -323,8 +410,7 @@ public abstract class StreamExecutionEnvironment {
 	 * A value of {@code -1} indicates that the system default value (as defined
 	 * in the configuration) should be used.
 	 *
-	 * @return The number of times the system will try to re-execute failed
-	 * tasks.
+	 * @return The number of times the system will try to re-execute failed tasks.
 	 */
 	public int getNumberOfExecutionRetries() {
 		return config.getNumberOfExecutionRetries();
@@ -544,7 +630,7 @@ public abstract class StreamExecutionEnvironment {
 		
 		// must not have null elements and mixed elements
 		FromElementsFunction.checkCollection(data, typeInfo.getTypeClass());
-		
+
 		SourceFunction<OUT> function;
 		try {
 			function = new FromElementsFunction<OUT>(typeInfo.createSerializer(getConfig()), data);
@@ -552,7 +638,7 @@ public abstract class StreamExecutionEnvironment {
 		catch (IOException e) {
 			throw new RuntimeException(e.getMessage(), e);
 		}
-		return addSource(function, "Collection Source", typeInfo);
+		return addSource(function, "Collection Source", typeInfo).setParallelism(1);
 	}
 
 	/**
@@ -933,15 +1019,12 @@ public abstract class StreamExecutionEnvironment {
 	private <OUT> DataStreamSource<OUT> createInput(InputFormat<OUT, ?> inputFormat,
 			TypeInformation<OUT> typeInfo, String sourceName) {
 		FileSourceFunction<OUT> function = new FileSourceFunction<OUT>(inputFormat, typeInfo);
-		DataStreamSource<OUT> returnStream = addSource(function, sourceName).returns(typeInfo);
-		streamGraph.setInputFormat(returnStream.getId(), inputFormat);
-		return returnStream;
+		return addSource(function, sourceName).returns(typeInfo);
 	}
 
 	/**
-	 * Adds a data source with a custom type information thus opening a
-	 * {@link org.apache.flink.streaming.api.datastream.DataStream}. Only in very special cases does the user need
-	 * to support type information. Otherwise use {@link #addSource(org.apache.flink.streaming.api.functions.source.SourceFunction)}
+	 * Adds a Data Source to the streaming topology.
+	 *
 	 * <p>
 	 * By default sources have a parallelism of 1. To enable parallel execution, the user defined source should
 	 * implement {@link org.apache.flink.streaming.api.functions.source.ParallelSourceFunction} or extend {@link
@@ -1031,10 +1114,9 @@ public abstract class StreamExecutionEnvironment {
 		boolean isParallel = function instanceof ParallelSourceFunction;
 
 		clean(function);
-		StreamOperator<OUT> sourceOperator = new StreamSource<OUT>(function);
+		StreamSource<OUT> sourceOperator = new StreamSource<OUT>(function);
 
-		return new DataStreamSource<OUT>(this, sourceName, typeInfo, sourceOperator,
-				isParallel, sourceName);
+		return new DataStreamSource<OUT>(this, typeInfo, sourceOperator, isParallel, sourceName);
 	}
 
 	// --------------------------------------------------------------------------------------------
@@ -1051,20 +1133,20 @@ public abstract class StreamExecutionEnvironment {
 	 * executed.
 	 */
 	public static StreamExecutionEnvironment getExecutionEnvironment() {
-		if (currentEnvironment != null) {
-			return currentEnvironment;
+		if (contextEnvironmentFactory != null) {
+			return contextEnvironmentFactory.createExecutionEnvironment();
 		}
+
 		ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 		if (env instanceof ContextEnvironment) {
 			ContextEnvironment ctx = (ContextEnvironment) env;
-			currentEnvironment = createContextEnvironment(ctx.getClient(), ctx.getJars(),
+			return createContextEnvironment(ctx.getClient(), ctx.getJars(),
 					ctx.getParallelism(), ctx.isWait());
 		} else if (env instanceof OptimizerPlanEnvironment | env instanceof PreviewPlanEnvironment) {
-			currentEnvironment = new StreamPlanEnvironment(env);
+			return new StreamPlanEnvironment(env);
 		} else {
 			return createLocalEnvironment();
 		}
-		return currentEnvironment;
 	}
 
 	private static StreamExecutionEnvironment createContextEnvironment(Client client,
@@ -1096,7 +1178,25 @@ public abstract class StreamExecutionEnvironment {
 	 * @return A local execution environment with the specified parallelism.
 	 */
 	public static LocalStreamEnvironment createLocalEnvironment(int parallelism) {
-		currentEnvironment = new LocalStreamEnvironment();
+		LocalStreamEnvironment env = new LocalStreamEnvironment();
+		env.setParallelism(parallelism);
+		return env;
+	}
+
+	/**
+	 * Creates a {@link LocalStreamEnvironment}. The local execution environment
+	 * will run the program in a multi-threaded fashion in the same JVM as the
+	 * environment was created in. It will use the parallelism specified in the
+	 * parameter.
+	 *
+	 * @param parallelism
+	 * 		The parallelism for the local environment.
+	 * 	@param configuration
+	 * 		Pass a custom configuration into the cluster
+	 * @return A local execution environment with the specified parallelism.
+	 */
+	public static LocalStreamEnvironment createLocalEnvironment(int parallelism, Configuration configuration) {
+		LocalStreamEnvironment currentEnvironment = new LocalStreamEnvironment(configuration);
 		currentEnvironment.setParallelism(parallelism);
 		return (LocalStreamEnvironment) currentEnvironment;
 	}
@@ -1125,8 +1225,8 @@ public abstract class StreamExecutionEnvironment {
 	 */
 	public static StreamExecutionEnvironment createRemoteEnvironment(String host, int port,
 			String... jarFiles) {
-		currentEnvironment = new RemoteStreamEnvironment(host, port, jarFiles);
-		return currentEnvironment;
+		RemoteStreamEnvironment env = new RemoteStreamEnvironment(host, port, jarFiles);
+		return env;
 	}
 
 	/**
@@ -1152,9 +1252,9 @@ public abstract class StreamExecutionEnvironment {
 	 */
 	public static StreamExecutionEnvironment createRemoteEnvironment(String host, int port,
 			int parallelism, String... jarFiles) {
-		currentEnvironment = new RemoteStreamEnvironment(host, port, jarFiles);
-		currentEnvironment.setParallelism(parallelism);
-		return currentEnvironment;
+		RemoteStreamEnvironment env = new RemoteStreamEnvironment(host, port, jarFiles);
+		env.setParallelism(parallelism);
+		return env;
 	}
 
 	/**
@@ -1192,7 +1292,11 @@ public abstract class StreamExecutionEnvironment {
 	 * @return The streamgraph representing the transformations
 	 */
 	public StreamGraph getStreamGraph() {
-		return streamGraph;
+		if (transformations.size() <= 0) {
+			throw new IllegalStateException("No operators defined in streaming topology. Cannot execute.");
+		}
+		StreamGraph result = StreamGraphGenerator.generate(this, transformations);
+		return result;
 	}
 
 	/**
@@ -1207,10 +1311,6 @@ public abstract class StreamExecutionEnvironment {
 		return getStreamGraph().getStreamingPlanAsJSON();
 	}
 
-	protected static void initializeFromFactory(StreamExecutionEnvironmentFactory eef) {
-		currentEnvironment = eef.createExecutionEnvironment();
-	}
-
 	/**
 	 * Returns a "closure-cleaned" version of the given function. Cleans only if closure cleaning
 	 * is not disabled in the {@link org.apache.flink.api.common.ExecutionConfig}
@@ -1223,4 +1323,28 @@ public abstract class StreamExecutionEnvironment {
 		return f;
 	}
 
+	/**
+	 * Adds an operator to the list of operators that should be executed when calling
+	 * {@link #execute}.
+	 *
+	 * <p>
+	 * When calling {@link #execute()} only the operators that where previously added to the list
+	 * are executed.
+	 *
+	 * <p>
+	 * This is not meant to be used by users. The API methods that create operators must call
+	 * this method.
+	 */
+	public void addOperator(StreamTransformation<?> transformation) {
+		Preconditions.checkNotNull(transformation, "Sinks must not be null.");
+		this.transformations.add(transformation);
+	}
+
+	// --------------------------------------------------------------------------------------------
+	//  Methods to control the context and local environments for execution from packaged programs
+	// --------------------------------------------------------------------------------------------
+
+	protected static void initializeContextEnvironment(StreamExecutionEnvironmentFactory ctx) {
+		contextEnvironmentFactory = ctx;
+	}
 }

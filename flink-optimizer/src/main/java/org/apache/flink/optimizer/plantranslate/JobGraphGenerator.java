@@ -70,7 +70,7 @@ import org.apache.flink.runtime.operators.DataSourceTask;
 import org.apache.flink.runtime.operators.DriverStrategy;
 import org.apache.flink.runtime.operators.JoinWithSolutionSetFirstDriver;
 import org.apache.flink.runtime.operators.JoinWithSolutionSetSecondDriver;
-import org.apache.flink.runtime.operators.MatchDriver;
+import org.apache.flink.runtime.operators.JoinDriver;
 import org.apache.flink.runtime.operators.NoOpDriver;
 import org.apache.flink.runtime.operators.RegularPactTask;
 import org.apache.flink.runtime.operators.chaining.ChainedDriver;
@@ -336,7 +336,7 @@ public class JobGraphGenerator implements Visitor<PlanNode> {
 					}
 					
 					// adjust the driver
-					if (conf.getDriver().equals(MatchDriver.class)) {
+					if (conf.getDriver().equals(JoinDriver.class)) {
 						conf.setDriver(inputNum == 0 ? JoinWithSolutionSetFirstDriver.class : JoinWithSolutionSetSecondDriver.class);
 					}
 					else if (conf.getDriver().equals(CoGroupDriver.class)) {
@@ -593,6 +593,16 @@ public class JobGraphGenerator implements Visitor<PlanNode> {
 		
 		if (inputPlanNode instanceof NAryUnionPlanNode) {
 			allInChannels = ((NAryUnionPlanNode) inputPlanNode).getListOfInputs().iterator();
+
+			// If the union node has a batch data exchange, we have to adopt the exchange mode of
+			// the inputs of the union as well, because the optimizer has a separate union
+			// node, which does not exist in the JobGraph. Otherwise, this can result in
+			// deadlocks when closing a branching flow at runtime.
+			if (input.getDataExchangeMode().equals(DataExchangeMode.BATCH)) {
+				for (Channel in : inputPlanNode.getInputs()) {
+					in.setDataExchangeMode(DataExchangeMode.BATCH);
+				}
+			}
 		}
 		else if (inputPlanNode instanceof BulkPartialSolutionPlanNode) {
 			if (this.vertices.get(inputPlanNode) == null) {

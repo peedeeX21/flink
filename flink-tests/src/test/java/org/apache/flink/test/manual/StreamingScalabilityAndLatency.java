@@ -24,6 +24,7 @@ import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.StreamingMode;
 import org.apache.flink.runtime.minicluster.LocalFlinkMiniCluster;
+import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.ParallelSourceFunction;
@@ -45,7 +46,7 @@ public class StreamingScalabilityAndLatency {
 
 		try {
 			Configuration config = new Configuration();
-			config.setInteger(ConfigConstants.LOCAL_INSTANCE_MANAGER_NUMBER_TASK_MANAGER, TASK_MANAGERS);
+			config.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, TASK_MANAGERS);
 			config.setInteger(ConfigConstants.TASK_MANAGER_MEMORY_SIZE_KEY, 80);
 			config.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, SLOTS_PER_TASK_MANAGER);
 			config.setInteger(ConfigConstants.TASK_MANAGER_NETWORK_NUM_BUFFERS_KEY, 20000);
@@ -55,7 +56,7 @@ public class StreamingScalabilityAndLatency {
 
 			cluster = new LocalFlinkMiniCluster(config, false, StreamingMode.STREAMING);
 			
-			runPartitioningProgram(cluster.getJobManagerRPCPort(), PARALLELISM);
+			runPartitioningProgram(cluster.getLeaderRPCPort(), PARALLELISM);
 		}
 		catch (Exception e) {
 			e.printStackTrace();
@@ -74,7 +75,7 @@ public class StreamingScalabilityAndLatency {
 		env.getConfig().enableObjectReuse();
 
 		env.setBufferTimeout(5L);
-//		env.enableCheckpointing(1000);
+		env.enableCheckpointing(1000, CheckpointingMode.AT_LEAST_ONCE);
 
 		env
 			.addSource(new TimeStampingSource())

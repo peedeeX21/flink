@@ -22,6 +22,7 @@ import org.apache.commons.io.FileUtils;
 import org.apache.flink.client.CliFrontend;
 import org.apache.flink.client.FlinkYarnSessionCli;
 import org.apache.flink.test.util.TestBaseUtils;
+import org.apache.flink.util.TestLogger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.service.Service;
 import org.apache.hadoop.yarn.api.records.ApplicationReport;
@@ -69,7 +70,7 @@ import java.util.concurrent.ConcurrentMap;
  *
  * The test is not thread-safe. Parallel execution of tests is not possible!
  */
-public abstract class YarnTestBase {
+public abstract class YarnTestBase extends TestLogger {
 	private static final Logger LOG = LoggerFactory.getLogger(YarnTestBase.class);
 
 	protected final static PrintStream originalStdout = System.out;
@@ -425,13 +426,15 @@ public abstract class YarnTestBase {
 		System.setErr(new PrintStream(errContent));
 
 
-		final int START_TIMEOUT_SECONDS = 60;
-
+		// we wait for at most three minutes
+		final int START_TIMEOUT_SECONDS = 180;
+		final long deadline = System.currentTimeMillis() + (START_TIMEOUT_SECONDS * 1000);
+		
 		Runner runner = new Runner(args, type);
 		runner.start();
 
 		boolean expectedStringSeen = false;
-		for(int second = 0; second <  START_TIMEOUT_SECONDS; second++) {
+		do {
 			sleep(1000);
 			String outContentString = outContent.toString();
 			String errContentString = errContent.toString();
@@ -448,8 +451,7 @@ public abstract class YarnTestBase {
 				}
 			}
 			// check output for correct TaskManager startup.
-			if(outContentString.contains(terminateAfterString)
-					|| errContentString.contains(terminateAfterString) ) {
+			if (outContentString.contains(terminateAfterString) || errContentString.contains(terminateAfterString) ) {
 				expectedStringSeen = true;
 				LOG.info("Found expected output in redirected streams");
 				// send "stop" command to command line interface
@@ -457,23 +459,28 @@ public abstract class YarnTestBase {
 				runner.sendStop();
 				// wait for the thread to stop
 				try {
-					runner.join(10000);
-				} catch (InterruptedException e) {
+					runner.join(30000);
+				}
+				catch (InterruptedException e) {
 					LOG.debug("Interrupted while stopping runner", e);
 				}
 				LOG.warn("RunWithArgs runner stopped.");
-				break;
 			}
-			// check if thread died
-			if(!runner.isAlive()) {
-				sendOutput();
-				if(runner.getReturnValue() != 0) {
-					Assert.fail("Runner thread died before the test was finished. Return value = " + runner.getReturnValue());
-				} else {
-					LOG.info("Runner stopped earlier than expected with return value = 0");
+			else {
+				// check if thread died
+				if (!runner.isAlive()) {
+					sendOutput();
+					if (runner.getReturnValue() != 0) {
+						Assert.fail("Runner thread died before the test was finished. Return value = "
+								+ runner.getReturnValue());
+					} else {
+						LOG.info("Runner stopped earlier than expected with return value = 0");
+					}
 				}
 			}
 		}
+		while (!expectedStringSeen && System.currentTimeMillis() < deadline);
+		
 		sendOutput();
 		Assert.assertTrue("During the timeout period of " + START_TIMEOUT_SECONDS + " seconds the " +
 				"expected string did not show up", expectedStringSeen);

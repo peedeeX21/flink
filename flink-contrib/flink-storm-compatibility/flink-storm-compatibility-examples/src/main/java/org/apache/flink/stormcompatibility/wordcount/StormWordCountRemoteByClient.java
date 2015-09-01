@@ -46,12 +46,12 @@ import org.apache.flink.stormcompatibility.api.FlinkTopologyBuilder;
  * <p/>
  * This example shows how to:
  * <ul>
- * <li>submit a regular Storm program to a local or remote Flink cluster.
+ * <li>submit a regular Storm program to a local or remote Flink cluster.</li>
  * </ul>
  */
 public class StormWordCountRemoteByClient {
 	public final static String topologyId = "Streaming WordCount";
-	private final static String uploadedJarLocation = "target/flink-storm-examples-0.9-SNAPSHOT-WordCountStorm.jar";
+	private final static String uploadedJarLocation = "target/WordCount-StormTopology.jar";
 
 	// *************************************************************************
 	// PROGRAM

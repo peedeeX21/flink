@@ -244,11 +244,6 @@ free for objects created by user-defined functions. (DEFAULT: 0.7)
 This parameter is only evaluated, if `taskmanager.memory.size` is not set.
 - `jobclient.polling.interval`: The interval (in seconds) in which the client
 polls the JobManager for the status of its job (DEFAULT: 2).
-- `taskmanager.runtime.max-fan`: The maximal fan-in for external merge joins and
-fan-out for spilling hash tables. Limits the number of file handles per operator,
-but may cause intermediate merging/partitioning, if set too small (DEFAULT: 128).
-- `taskmanager.runtime.sort-spilling-threshold`: A sort operation starts spilling
-when this fraction of its memory budget is full (DEFAULT: 0.8).
 - `taskmanager.heartbeat-interval`: The interval in which the TaskManager sends
 heartbeats to the JobManager.
 - `jobmanager.max-heartbeat-delay-before-failure.msecs`: The maximum time that a
@@ -324,6 +319,16 @@ sample exceeds this value (possible because of misconfiguration of the parser),
 the sampling aborts. This value can be overridden for a specific input with the
 input format's parameters (DEFAULT: 2097152 (= 2 MiBytes)).
 
+### Runtime Algorithms
+
+- `taskmanager.runtime.max-fan`: The maximal fan-in for external merge joins and
+fan-out for spilling hash tables. Limits the number of file handles per operator,
+but may cause intermediate merging/partitioning, if set too small (DEFAULT: 128).
+- `taskmanager.runtime.sort-spilling-threshold`: A sort operation starts spilling
+when this fraction of its memory budget is full (DEFAULT: 0.8).
+- `taskmanager.runtime.hashjoin-bloom-filters`: If true, the hash join uses bloom filters to pre-filter records against spilled partitions. (DEFAULT: true)
+
+
 ## YARN
 
 
@@ -345,6 +350,37 @@ will restart and the YARN Client will loose the connection. Also, the JobManager
 to set the JM host:port manually. It is recommended to leave this option at 1.
 
 - `yarn.heartbeat-delay` (Default: 5 seconds). Time between heartbeats with the ResourceManager.
+
+- `yarn.properties-file.location` (Default: temp directory). When a Flink job is submitted to YARN, 
+the JobManager's host and the number of available processing slots is written into a properties file, 
+so that the Flink client is able to pick those details up. This configuration parameter allows 
+changing the default location of that file (for example for environments sharing a Flink 
+installation between users)
+
+## High Availability Mode
+
+- `recovery.mode`: (Default 'standalone') Defines the recovery mode used for the cluster execution. Currently,
+Flink supports the 'standalone' mode where only a single JobManager runs and no JobManager state is checkpointed.
+The high availability mode 'zookeeper' supports the execution of multiple JobManagers and JobManager state checkpointing.
+Among the group of JobManagers, ZooKeeper elects one of them as the leader which is responsible for the cluster execution.
+In case of a JobManager failure, a standby JobManager will be elected as the new leader and is given the last checkpointed JobManager state.
+In order to use the 'zookeeper' mode, it is mandatory to also define the `ha.zookeeper.quorum` configuration value.
+
+- `ha.zookeeper.quorum`: Defines the ZooKeeper quorum URL which is used to connet to the ZooKeeper cluster when the 'zookeeper' recovery mode is selected
+
+- `ha.zookeeper.dir`: (Default '/flink') Defines the root dir under which the ZooKeeper recovery mode will create znodes. 
+
+- `ha.zookeeper.dir.latch`: (Default '/leaderlatch') Defines the znode of the leader latch which is used to elect the leader.
+
+- `ha.zookeeper.dir.leader`: (Default '/leader') Defines the znode of the leader which contains the URL to the leader and the current leader session ID
+
+- `ha.zookeeper.client.session-timeout`: (Default '60000') Defines the session timeout for the ZooKeeper session in ms.
+
+- `ha.zookeeper.client.connection-timeout`: (Default '15000') Defines the connection timeout for ZooKeeper in ms.
+
+- `ha.zookeeper.client.retry-wait`: (Default '5000') Defines the pause between consecutive retries in ms.
+
+- `ha.zookeeper.client.max-retry-attempts`: (Default '3') Defines the number of connection retries before the client gives up.
 
 ## Background
 

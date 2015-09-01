@@ -22,6 +22,7 @@ import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.runtime.io.network.api.CheckpointBarrier;
 import org.apache.flink.runtime.io.network.api.writer.ResultPartitionWriter;
 import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.StreamMap;
@@ -167,7 +168,6 @@ public class OneInputStreamTaskTest {
 	 * This test verifies that checkpoint barriers are correctly forwarded.
 	 */
 	@Test
-	@SuppressWarnings("unchecked")
 	public void testCheckpointBarriers() throws Exception {
 		final OneInputStreamTask<String, String> mapTask = new OneInputStreamTask<String, String>();
 		final OneInputStreamTaskTestHarness<String, String> testHarness = new OneInputStreamTaskTestHarness<String, String>(mapTask, 2, 2, BasicTypeInfo.STRING_TYPE_INFO, BasicTypeInfo.STRING_TYPE_INFO);
@@ -225,7 +225,6 @@ public class OneInputStreamTaskTest {
 	 * then all inputs receive barriers from a later checkpoint.
 	 */
 	@Test
-	@SuppressWarnings("unchecked")
 	public void testOvertakingCheckpointBarriers() throws Exception {
 		final OneInputStreamTask<String, String> mapTask = new OneInputStreamTask<String, String>();
 		final OneInputStreamTaskTestHarness<String, String> testHarness = new OneInputStreamTaskTestHarness<String, String>(mapTask, 2, 2, BasicTypeInfo.STRING_TYPE_INFO, BasicTypeInfo.STRING_TYPE_INFO);
@@ -280,7 +279,6 @@ public class OneInputStreamTaskTest {
 		testHarness.processEvent(new CheckpointBarrier(0, 0), 1, 1);
 
 		testHarness.waitForInputProcessing();
-
 
 		testHarness.endInput();
 

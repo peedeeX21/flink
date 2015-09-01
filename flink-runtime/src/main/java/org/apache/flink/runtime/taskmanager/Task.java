@@ -51,11 +51,11 @@ import org.apache.flink.runtime.jobgraph.tasks.CheckpointedOperator;
 import org.apache.flink.runtime.jobgraph.tasks.OperatorStateCarrier;
 import org.apache.flink.runtime.memorymanager.MemoryManager;
 import org.apache.flink.runtime.messages.TaskManagerMessages.FatalError;
-import org.apache.flink.runtime.messages.TaskMessages;
 import org.apache.flink.runtime.messages.TaskMessages.TaskInFinalState;
+import org.apache.flink.runtime.messages.TaskMessages.UpdateTaskExecutionState;
 import org.apache.flink.runtime.state.StateHandle;
 import org.apache.flink.runtime.state.StateUtils;
-import org.apache.flink.runtime.util.SerializedValue;
+import org.apache.flink.util.SerializedValue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import scala.concurrent.duration.FiniteDuration;
@@ -145,6 +145,9 @@ public class Task implements Runnable {
 	/** The name of the class that holds the invokable code */
 	private final String nameOfInvokableClass;
 
+	/** Access to task manager configuration and host names*/
+	private final TaskManagerRuntimeInfo taskManagerConfig;
+	
 	/** The memory manager to be used by this task */
 	private final MemoryManager memoryManager;
 
@@ -227,7 +230,8 @@ public class Task implements Runnable {
 				ActorGateway jobManagerActor,
 				FiniteDuration actorAskTimeout,
 				LibraryCacheManager libraryCache,
-				FileCache fileCache)
+				FileCache fileCache,
+				TaskManagerRuntimeInfo taskManagerConfig)
 	{
 		checkArgument(tdd.getNumberOfSubtasks() > 0);
 		checkArgument(tdd.getIndexInSubtaskGroup() >= 0);
@@ -258,6 +262,7 @@ public class Task implements Runnable {
 		this.libraryCache = checkNotNull(libraryCache);
 		this.fileCache = checkNotNull(fileCache);
 		this.network = checkNotNull(networkEnvironment);
+		this.taskManagerConfig = checkNotNull(taskManagerConfig);
 
 		this.executionListenerActors = new CopyOnWriteArrayList<ActorGateway>();
 
@@ -510,7 +515,7 @@ public class Task implements Runnable {
 					userCodeClassLoader, memoryManager, ioManager,
 					broadcastVariableManager, accumulatorRegistry,
 					splitProvider, distributedCacheEntries,
-					writers, inputGates, jobManager);
+					writers, inputGates, jobManager, taskManagerConfig);
 
 			// let the task code create its readers and writers
 			invokable.setEnvironment(env);
@@ -566,7 +571,7 @@ public class Task implements Runnable {
 			// notify everyone that we switched to running. especially the TaskManager needs
 			// to know this!
 			notifyObservers(ExecutionState.RUNNING, null);
-			taskManager.tell(new TaskMessages.UpdateTaskExecutionState(
+			taskManager.tell(new UpdateTaskExecutionState(
 					new TaskExecutionState(jobId, executionId, ExecutionState.RUNNING)));
 
 			// make sure the user code classloader is accessible thread-locally
@@ -851,8 +856,7 @@ public class Task implements Runnable {
 		}
 
 		TaskExecutionState stateUpdate = new TaskExecutionState(jobId, executionId, newState, error);
-		TaskMessages.UpdateTaskExecutionState actorMessage = new
-				TaskMessages.UpdateTaskExecutionState(stateUpdate);
+		UpdateTaskExecutionState actorMessage = new UpdateTaskExecutionState(stateUpdate);
 
 		for (ActorGateway listener : executionListenerActors) {
 			listener.tell(actorMessage);
@@ -1089,7 +1093,7 @@ public class Task implements Runnable {
 				// interrupt the running thread initially 
 				executer.interrupt();
 				try {
-					executer.join(10000);
+					executer.join(30000);
 				}
 				catch (InterruptedException e) {
 					// we can ignore this
@@ -1112,7 +1116,7 @@ public class Task implements Runnable {
 
 					executer.interrupt();
 					try {
-						executer.join(10000);
+						executer.join(30000);
 					}
 					catch (InterruptedException e) {
 						// we can ignore this

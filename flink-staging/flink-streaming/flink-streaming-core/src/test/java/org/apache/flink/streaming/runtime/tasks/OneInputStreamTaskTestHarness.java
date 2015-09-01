@@ -19,7 +19,7 @@ package org.apache.flink.streaming.runtime.tasks;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.runtime.event.task.AbstractEvent;
+import org.apache.flink.runtime.event.AbstractEvent;
 import org.apache.flink.runtime.io.network.partition.consumer.StreamTestSingleInputGate;
 
 import java.io.IOException;
@@ -62,7 +62,6 @@ public class OneInputStreamTaskTestHarness<IN, OUT> extends StreamTaskTestHarnes
 	 */
 	public OneInputStreamTaskTestHarness(OneInputStreamTask<IN, OUT> task,
 			int numInputGates,
-
 			int numInputChannelsPerGate,
 			TypeInformation<IN> inputType,
 			TypeInformation<OUT> outputType) {

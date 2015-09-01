@@ -41,7 +41,6 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.operators.testutils.MockEnvironment;
 import org.apache.flink.runtime.operators.testutils.MockInputSplitProvider;
 import org.apache.flink.runtime.state.LocalStateHandle.LocalStateHandleProvider;
-import org.apache.flink.runtime.state.PartitionedStateHandle;
 import org.apache.flink.runtime.state.StateHandle;
 import org.apache.flink.streaming.api.checkpoint.Checkpointed;
 import org.apache.flink.streaming.api.datastream.KeyedDataStream;
@@ -52,7 +51,7 @@ import org.apache.flink.streaming.api.operators.StreamMap;
 import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.StreamingRuntimeContext;
-import org.apache.flink.streaming.util.TestStreamEnvironment;
+import org.apache.flink.streaming.util.StreamingMultipleProgramsTestBase;
 import org.apache.flink.util.InstantiationUtil;
 import org.junit.Test;
 
@@ -63,7 +62,7 @@ import com.google.common.collect.ImmutableMap;
  * partitioned and non-partitioned user states. This test mimics the runtime
  * behavior of stateful stream operators.
  */
-public class StatefulOperatorTest {
+public class StatefulOperatorTest extends StreamingMultipleProgramsTestBase {
 
 	@Test
 	public void simpleStateTest() throws Exception {
@@ -105,7 +104,8 @@ public class StatefulOperatorTest {
 	
 	@Test
 	public void apiTest() throws Exception {
-		StreamExecutionEnvironment env = new TestStreamEnvironment(3, 32);
+		StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+		env.setParallelism(3);
 
 		KeyedDataStream<Integer> keyedStream = env.fromCollection(Arrays.asList(0, 1, 2, 3, 4, 5, 6)).keyBy(new ModKey(4));
 		
@@ -142,9 +142,12 @@ public class StatefulOperatorTest {
 			KeySelector<Integer, Serializable> partitioner, byte[] serializedState) throws Exception {
 		final List<String> outputList = output;
 
-		StreamingRuntimeContext context = new StreamingRuntimeContext("MockTask", new MockEnvironment(3 * 1024 * 1024,
-				new MockInputSplitProvider(), 1024), null, new ExecutionConfig(), partitioner,
-				new LocalStateHandleProvider<Serializable>(), new HashMap<String, Accumulator<?, ?>>());
+		StreamingRuntimeContext context = new StreamingRuntimeContext(
+				new MockEnvironment("MockTask", 3 * 1024 * 1024, new MockInputSplitProvider(), 1024), 
+				new ExecutionConfig(),
+				partitioner,
+				new LocalStateHandleProvider<Serializable>(),
+				new HashMap<String, Accumulator<?, ?>>());
 
 		StreamMap<Integer, String> op = new StreamMap<Integer, String>(new StatefulMapper());
 
@@ -166,9 +169,9 @@ public class StatefulOperatorTest {
 		}, context);
 
 		if (serializedState != null) {
-			op.restoreInitialState((Tuple2<StateHandle<Serializable>, Map<String, PartitionedStateHandle>>) InstantiationUtil
-					.deserializeObject(serializedState, Thread.currentThread()
-							.getContextClassLoader()));
+			ClassLoader cl = Thread.currentThread().getContextClassLoader();
+			op.restoreInitialState((Tuple2<StateHandle<Serializable>, Map<String, OperatorStateHandle>>) InstantiationUtil
+					.deserializeObject(serializedState, cl));
 		}
 
 		op.open(null);
@@ -218,14 +221,15 @@ public class StatefulOperatorTest {
 			}
 		}
 		
-		@SuppressWarnings({ "rawtypes", "unchecked" })
+		@SuppressWarnings("unchecked")
 		@Override
 		public void close() throws Exception {
-			Map<String, StreamOperatorState> states = ((StreamingRuntimeContext) getRuntimeContext()).getOperatorStates();
+			Map<String, StreamOperatorState<?, ?>> states = ((StreamingRuntimeContext) getRuntimeContext()).getOperatorStates();
 			PartitionedStreamOperatorState<Integer, Integer, Integer> groupCounter = (PartitionedStreamOperatorState<Integer, Integer, Integer>) states.get("groupCounter");
 			for (Entry<Serializable, Integer> count : groupCounter.getPartitionedState().entrySet()) {
 				Integer key = (Integer) count.getKey();
 				Integer expected = key < 3 ? 2 : 1;
+				
 				assertEquals(new MutableInt(expected), count.getValue());
 			}
 		}
@@ -258,11 +262,12 @@ public class StatefulOperatorTest {
 			groupCounter = getRuntimeContext().getOperatorState("groupCounter", 0, true);
 		}
 		
-		@SuppressWarnings({ "rawtypes", "unchecked" })
+		@SuppressWarnings("unchecked")
 		@Override
 		public void close() throws Exception {
-			Map<String, StreamOperatorState> states = ((StreamingRuntimeContext) getRuntimeContext()).getOperatorStates();
-			PartitionedStreamOperatorState<Integer, Integer, Integer> groupCounter = (PartitionedStreamOperatorState<Integer, Integer, Integer>) states.get("groupCounter");
+			Map<String, StreamOperatorState<?, ?>> states = ((StreamingRuntimeContext) getRuntimeContext()).getOperatorStates();
+			PartitionedStreamOperatorState<Integer, Integer, Integer> groupCounter = 
+					(PartitionedStreamOperatorState<Integer, Integer, Integer>) states.get("groupCounter");
 			for (Entry<Serializable, Integer> count : groupCounter.getPartitionedState().entrySet()) {
 				Integer key = (Integer) count.getKey();
 				Integer expected = key < 3 ? 2 : 1;

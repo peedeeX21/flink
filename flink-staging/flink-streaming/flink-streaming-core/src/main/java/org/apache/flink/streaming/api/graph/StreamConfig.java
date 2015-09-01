@@ -28,6 +28,8 @@ import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.state.StateHandleProvider;
+import org.apache.flink.runtime.util.ClassLoaderUtil;
+import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.collector.selector.OutputSelectorWrapper;
 import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.runtime.tasks.StreamTaskException;
@@ -37,6 +39,10 @@ public class StreamConfig implements Serializable {
 
 	private static final long serialVersionUID = 1L;
 
+	// ------------------------------------------------------------------------
+	//  Config Keys
+	// ------------------------------------------------------------------------
+	
 	private static final String NUMBER_OF_OUTPUTS = "numberOfOutputs";
 	private static final String NUMBER_OF_INPUTS = "numberOfInputs";
 	private static final String CHAINED_OUTPUTS = "chainedOutputs";
@@ -59,16 +65,26 @@ public class StreamConfig implements Serializable {
 	private static final String EDGES_IN_ORDER = "edgesInOrder";
 	private static final String OUT_STREAM_EDGES = "outStreamEdges";
 	private static final String IN_STREAM_EDGES = "inStreamEdges";
+
+	private static final String CHECKPOINTING_ENABLED = "checkpointing";
 	private static final String STATEHANDLE_PROVIDER = "stateHandleProvider";
 	private static final String STATE_PARTITIONER = "statePartitioner";
-
-	// DEFAULT VALUES
+	private static final String CHECKPOINT_MODE = "checkpointMode";
+	
+	
+	// ------------------------------------------------------------------------
+	//  Default Values
+	// ------------------------------------------------------------------------
+	
 	private static final long DEFAULT_TIMEOUT = 100;
-	public static final String STATE_MONITORING = "STATE_MONITORING";
+	private static final CheckpointingMode DEFAULT_CHECKPOINTING_MODE = CheckpointingMode.EXACTLY_ONCE;
+	
+	
+	// ------------------------------------------------------------------------
+	//  Config
+	// ------------------------------------------------------------------------
 
-	// CONFIG METHODS
-
-	private Configuration config;
+	private final Configuration config;
 
 	public StreamConfig(Configuration config) {
 		this.config = config;
@@ -77,6 +93,11 @@ public class StreamConfig implements Serializable {
 	public Configuration getConfiguration() {
 		return config;
 	}
+
+	// ------------------------------------------------------------------------
+	//  Configured Properties
+	// ------------------------------------------------------------------------
+	
 
 	public void setVertexID(Integer vertexID) {
 		config.setInteger(VERTEX_NAME, vertexID);
@@ -178,12 +199,26 @@ public class StreamConfig implements Serializable {
 			}
 		}
 	}
-
-	@SuppressWarnings({ "unchecked" })
+	
 	public <T> T getStreamOperator(ClassLoader cl) {
 		try {
-			return (T) InstantiationUtil.readObjectFromConfig(this.config, SERIALIZEDUDF, cl);
-		} catch (Exception e) {
+			@SuppressWarnings("unchecked")
+			T result = (T) InstantiationUtil.readObjectFromConfig(this.config, SERIALIZEDUDF, cl);
+			return result;
+		}
+		catch (ClassNotFoundException e) {
+			String classLoaderInfo = ClassLoaderUtil.getUserCodeClassLoaderInfo(cl);
+			boolean loadableDoubleCheck = ClassLoaderUtil.validateClassLoadable(e, cl);
+			
+			String exceptionMessage = "Cannot load user class: " + e.getMessage()
+					+ "\nClassLoader info: " + classLoaderInfo + 
+					(loadableDoubleCheck ? 
+							"\nClass was actually found in classloader - deserialization issue." :
+							"\nClass not resolvable through given classloader.");
+			
+			throw new StreamTaskException(exceptionMessage);
+		}
+		catch (Exception e) {
 			throw new StreamTaskException("Cannot instantiate user function.", e);
 		}
 	}
@@ -220,29 +255,6 @@ public class StreamConfig implements Serializable {
 
 	public long getIterationWaitTime() {
 		return config.getLong(ITERATON_WAIT, 0);
-	}
-
-	public void setSelectedNames(Integer output, List<String> selected) {
-		if (selected == null) {
-			selected = new ArrayList<String>();
-		}
-
-		try {
-			InstantiationUtil.writeObjectToConfig(selected, this.config, OUTPUT_NAME + output);
-		} catch (IOException e) {
-			throw new StreamTaskException("Cannot serialize OutputSelector for name \"" + output+ "\".", e);
-		}
-	}
-
-	@SuppressWarnings("unchecked")
-	public List<String> getSelectedNames(Integer output, ClassLoader cl) {
-		List<String> selectedNames;
-		try {
-			selectedNames = (List<String>) InstantiationUtil.readObjectFromConfig(this.config, OUTPUT_NAME + output, cl);
-		} catch (Exception e) {
-			throw new StreamTaskException("Cannot deserialize OutputSelector for name \"" + output + "\".", e);
-		}
-		return selectedNames == null ? new ArrayList<String>() : selectedNames;
 	}
 
 	public void setNumberOfInputs(int numberOfInputs) {
@@ -335,13 +347,29 @@ public class StreamConfig implements Serializable {
 		}
 	}
 
-	public void setStateMonitoring(boolean stateMonitoring) {
-		config.setBoolean(STATE_MONITORING, stateMonitoring);
+	// --------------------- checkpointing -----------------------
+	
+	public void setCheckpointingEnabled(boolean enabled) {
+		config.setBoolean(CHECKPOINTING_ENABLED, enabled);
 	}
 
-	public boolean getStateMonitoring() {
-		return config.getBoolean(STATE_MONITORING, false);
+	public boolean isCheckpointingEnabled() {
+		return config.getBoolean(CHECKPOINTING_ENABLED, false);
 	}
+	
+	public void setCheckpointMode(CheckpointingMode mode) {
+		config.setInteger(CHECKPOINT_MODE, mode.ordinal());
+	}
+
+	public CheckpointingMode getCheckpointMode() {
+		int ordinal = config.getInteger(CHECKPOINT_MODE, -1);
+		if (ordinal >= 0) {
+			return CheckpointingMode.values()[ordinal];
+		} else {
+			return DEFAULT_CHECKPOINTING_MODE; 
+		}
+	}
+	
 
 	public void setOutEdgesInOrder(List<StreamEdge> outEdgeList) {
 		try {
@@ -435,28 +463,29 @@ public class StreamConfig implements Serializable {
 		builder.append("\n=======================");
 		builder.append("Stream Config");
 		builder.append("=======================");
-		builder.append("\nTask name: " + getVertexID());
-		builder.append("\nNumber of non-chained inputs: " + getNumberOfInputs());
-		builder.append("\nNumber of non-chained outputs: " + getNumberOfOutputs());
-		builder.append("\nOutput names: " + getNonChainedOutputs(cl));
+		builder.append("\nTask name: ").append(getVertexID());
+		builder.append("\nNumber of non-chained inputs: ").append(getNumberOfInputs());
+		builder.append("\nNumber of non-chained outputs: ").append(getNumberOfOutputs());
+		builder.append("\nOutput names: ").append(getNonChainedOutputs(cl));
 		builder.append("\nPartitioning:");
 		for (StreamEdge output : getNonChainedOutputs(cl)) {
 			int outputname = output.getTargetId();
-			builder.append("\n\t" + outputname + ": " + output.getPartitioner());
+			builder.append("\n\t").append(outputname).append(": ").append(output.getPartitioner());
 		}
 
-		builder.append("\nChained subtasks: " + getChainedOutputs(cl));
+		builder.append("\nChained subtasks: ").append(getChainedOutputs(cl));
 
 		try {
-			builder.append("\nOperator: " + getStreamOperator(cl).getClass().getSimpleName());
-		} catch (Exception e) {
+			builder.append("\nOperator: ").append(getStreamOperator(cl).getClass().getSimpleName());
+		}
+		catch (Exception e) {
 			builder.append("\nOperator: Missing");
 		}
-		builder.append("\nBuffer timeout: " + getBufferTimeout());
-		builder.append("\nState Monitoring: " + getStateMonitoring());
+		builder.append("\nBuffer timeout: ").append(getBufferTimeout());
+		builder.append("\nState Monitoring: ").append(isCheckpointingEnabled());
 		if (isChainStart() && getChainedOutputs(cl).size() > 0) {
 			builder.append("\n\n\n---------------------\nChained task configs\n---------------------\n");
-			builder.append(getTransitiveChainedTaskConfigs(cl)).toString();
+			builder.append(getTransitiveChainedTaskConfigs(cl));
 		}
 
 		return builder.toString();

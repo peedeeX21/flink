@@ -46,6 +46,7 @@ under the License.
 		<module>flink-table</module>
 		<module>flink-ml</module>
 		<module>flink-language-binding</module>
+		<module>flink-gelly-scala</module>
 	</modules>
 	
 	<!-- See main pom.xml for explanation of profiles -->
@@ -59,10 +60,10 @@ under the License.
 				</property>
 			</activation>
 			<modules>
-				<!-- Include the Flink-tachyon project only for HD2.
+				<!-- Include the flink-fs-tests project only for HD2.
 				 	The HDFS minicluster interfaces changed between the two versions.
 				 -->
-				<module>flink-tachyon</module>
+				<module>flink-fs-tests</module>
 			</modules>
 		</profile>
 		<profile>

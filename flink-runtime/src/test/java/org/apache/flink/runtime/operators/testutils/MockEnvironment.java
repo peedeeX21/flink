@@ -18,8 +18,8 @@
 
 package org.apache.flink.runtime.operators.testutils;
 
-import org.apache.flink.api.common.accumulators.Accumulator;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.UnmodifiableConfiguration;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.core.memory.MemorySegment;
 import org.apache.flink.runtime.accumulators.AccumulatorRegistry;
@@ -42,6 +42,7 @@ import org.apache.flink.runtime.jobgraph.tasks.InputSplitProvider;
 import org.apache.flink.runtime.memorymanager.DefaultMemoryManager;
 import org.apache.flink.runtime.memorymanager.MemoryManager;
 import org.apache.flink.runtime.state.StateHandle;
+import org.apache.flink.runtime.taskmanager.TaskManagerRuntimeInfo;
 import org.apache.flink.types.Record;
 import org.apache.flink.util.MutableObjectIterator;
 import org.mockito.invocation.InvocationOnMock;
@@ -61,6 +62,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 public class MockEnvironment implements Environment {
+	
+	private final String taskName;
 	
 	private final MemoryManager memManager;
 
@@ -84,7 +87,8 @@ public class MockEnvironment implements Environment {
 
 	private final int bufferSize;
 
-	public MockEnvironment(long memorySize, MockInputSplitProvider inputSplitProvider, int bufferSize) {
+	public MockEnvironment(String taskName, long memorySize, MockInputSplitProvider inputSplitProvider, int bufferSize) {
+		this.taskName = taskName;
 		this.jobConfiguration = new Configuration();
 		this.taskConfiguration = new Configuration();
 		this.inputs = new LinkedList<InputGate>();
@@ -192,6 +196,11 @@ public class MockEnvironment implements Environment {
 	}
 
 	@Override
+	public TaskManagerRuntimeInfo getTaskManagerInfo() {
+		return new TaskManagerRuntimeInfo("localhost", new UnmodifiableConfiguration(new Configuration()));
+	}
+
+	@Override
 	public int getNumberOfSubtasks() {
 		return 1;
 	}
@@ -208,12 +217,12 @@ public class MockEnvironment implements Environment {
 
 	@Override
 	public String getTaskName() {
-		return null;
+		return taskName;
 	}
 
 	@Override
 	public String getTaskNameWithSubtasks() {
-		return null;
+		return taskName + "(0/1)";
 	}
 
 	@Override

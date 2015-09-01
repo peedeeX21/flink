@@ -60,6 +60,7 @@ import org.apache.flink.runtime.operators.util.ReaderIterator;
 import org.apache.flink.runtime.operators.util.TaskConfig;
 import org.apache.flink.runtime.plugable.DeserializationDelegate;
 import org.apache.flink.runtime.plugable.SerializationDelegate;
+import org.apache.flink.runtime.taskmanager.TaskManagerRuntimeInfo;
 import org.apache.flink.types.Record;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.InstantiationUtil;
@@ -225,7 +226,7 @@ public class RegularPactTask<S extends Function, OT> extends AbstractInvokable i
 	 * and as a setup method on the TaskManager.
 	 */
 	@Override
-	public void registerInputOutput() {
+	public void registerInputOutput() throws Exception {
 		if (LOG.isDebugEnabled()) {
 			LOG.debug(formatLogString("Start registering input and output."));
 		}
@@ -238,26 +239,13 @@ public class RegularPactTask<S extends Function, OT> extends AbstractInvokable i
 		final Class<? extends PactDriver<S, OT>> driverClass = this.config.getDriver();
 		this.driver = InstantiationUtil.instantiate(driverClass, PactDriver.class);
 
-		// initialize the readers. this is necessary for nephele to create the input gates
-		// however, this does not trigger any local processing.
-		try {
-			initInputReaders();
-			initBroadcastInputReaders();
-		} catch (Exception e) {
-			throw new RuntimeException("Initializing the input streams failed in Task " + getEnvironment().getTaskName() +
-					(e.getMessage() == null ? "." : ": " + e.getMessage()), e);
-		}
+		// initialize the readers.
+		// this does not yet trigger any stream consuming or processing.
+		initInputReaders();
+		initBroadcastInputReaders();
 
-		// initialize the writers. this is necessary for nephele to create the output gates.
-		// because in the presence of chained tasks, the tasks writers depend on the last task in the chain,
-		// we need to initialize the chained tasks as well. the chained tasks are only set up, but no work
-		// (such as setting up a sorter, etc.) starts
-		try {
-			initOutputs();
-		} catch (Exception e) {
-			throw new RuntimeException("Initializing the output handlers failed" +
-					(e.getMessage() == null ? "." : ": " + e.getMessage()), e);
-		}
+		// initialize the writers.
+		initOutputs();
 
 		if (LOG.isDebugEnabled()) {
 			LOG.debug(formatLogString("Finished registering input and output."));
@@ -660,7 +648,7 @@ public class RegularPactTask<S extends Function, OT> extends AbstractInvokable i
 	 */
 	protected void initInputReaders() throws Exception {
 		final int numInputs = getNumTaskInputs();
-		final MutableReader<?>[] inputReaders = new MutableReader[numInputs];
+		final MutableReader<?>[] inputReaders = new MutableReader<?>[numInputs];
 
 		int currentReaderOffset = 0;
 
@@ -705,7 +693,7 @@ public class RegularPactTask<S extends Function, OT> extends AbstractInvokable i
 	 */
 	protected void initBroadcastInputReaders() throws Exception {
 		final int numBroadcastInputs = this.config.getNumBroadcastInputs();
-		final MutableReader<?>[] broadcastInputReaders = new MutableReader[numBroadcastInputs];
+		final MutableReader<?>[] broadcastInputReaders = new MutableReader<?>[numBroadcastInputs];
 
 		int currentReaderOffset = config.getNumInputs();
 
@@ -737,8 +725,8 @@ public class RegularPactTask<S extends Function, OT> extends AbstractInvokable i
 	 */
 	protected void initInputsSerializersAndComparators(int numInputs, int numComparators) throws Exception {
 		this.inputSerializers = new TypeSerializerFactory<?>[numInputs];
-		this.inputComparators = numComparators > 0 ? new TypeComparator[numComparators] : null;
-		this.inputIterators = new MutableObjectIterator[numInputs];
+		this.inputComparators = numComparators > 0 ? new TypeComparator<?>[numComparators] : null;
+		this.inputIterators = new MutableObjectIterator<?>[numInputs];
 
 		ClassLoader userCodeClassLoader = getUserCodeClassLoader();
 		
@@ -764,7 +752,7 @@ public class RegularPactTask<S extends Function, OT> extends AbstractInvokable i
 	 * Creates all the serializers and iterators for the broadcast inputs.
 	 */
 	protected void initBroadcastInputsSerializers(int numBroadcastInputs) throws Exception {
-		this.broadcastInputSerializers = new TypeSerializerFactory[numBroadcastInputs];
+		this.broadcastInputSerializers = new TypeSerializerFactory<?>[numBroadcastInputs];
 
 		ClassLoader userCodeClassLoader = getUserCodeClassLoader();
 
@@ -787,8 +775,8 @@ public class RegularPactTask<S extends Function, OT> extends AbstractInvokable i
 		final MemoryManager memMan = getMemoryManager();
 		final IOManager ioMan = getIOManager();
 
-		this.localStrategies = new CloseableInputProvider[numInputs];
-		this.inputs = new MutableObjectIterator[numInputs];
+		this.localStrategies = new CloseableInputProvider<?>[numInputs];
+		this.inputs = new MutableObjectIterator<?>[numInputs];
 		this.excludeFromReset = new boolean[numInputs];
 		this.inputIsCached = new boolean[numInputs];
 		this.inputIsAsyncMaterialized = new boolean[numInputs];
@@ -807,8 +795,8 @@ public class RegularPactTask<S extends Function, OT> extends AbstractInvokable i
 		// acts as a pipeline breaker. this one should only be there, if a pipeline breaker is needed.
 		// the second variant spills to the side and will not read unless the result is also consumed
 		// in a pipelined fashion.
-		this.resettableInputs = new SpillingResettableMutableObjectIterator[numInputs];
-		this.tempBarriers = new TempBarrier[numInputs];
+		this.resettableInputs = new SpillingResettableMutableObjectIterator<?>[numInputs];
+		this.tempBarriers = new TempBarrier<?>[numInputs];
 
 		for (int i = 0; i < numInputs; i++) {
 			final int memoryPages;
@@ -1041,6 +1029,11 @@ public class RegularPactTask<S extends Function, OT> extends AbstractInvokable i
 	@Override
 	public TaskConfig getTaskConfig() {
 		return this.config;
+	}
+
+	@Override
+	public TaskManagerRuntimeInfo getTaskManagerInfo() {
+		return getEnvironment().getTaskManagerInfo();
 	}
 
 	@Override

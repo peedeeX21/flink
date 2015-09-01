@@ -83,12 +83,11 @@ under the License.
 		<guava.version>18.0</guava.version>
 		<akka.version>2.3.7</akka.version>
 		<scala.macros.version>2.0.1</scala.macros.version>
-		<kryoserialization.version>0.3.2</kryoserialization.version>
 		<chill.version>0.5.2</chill.version>
 		<asm.version>5.0.4</asm.version>
 		<tez.version>0.6.1</tez.version>
 		<zookeeper.version>3.4.6</zookeeper.version>
-		<curatorrecipes.version>2.8.0</curatorrecipes.version>
+		<curator.version>2.8.0</curator.version>
 	</properties>
 
 	<dependencies>
@@ -224,6 +223,12 @@ under the License.
 				<version>3.2.1</version>
 			</dependency>
 
+			<dependency>
+				<groupId>org.apache.commons</groupId>
+				<artifactId>commons-math3</artifactId>
+				<version>3.5</version>
+			</dependency>
+
 			<!-- Managed dependency required for HBase in flink-hbase -->
 			<dependency>
 				<groupId>org.javassist</groupId>
@@ -327,15 +332,22 @@ under the License.
 			</dependency>
 
 			<dependency>
-				<groupId>org.apache.zookeeper</groupId>
-				<artifactId>zookeeper</artifactId>
-				<version>${zookeeper.version}</version>
+				<groupId>org.apache.curator</groupId>
+				<artifactId>curator-recipes</artifactId>
+				<version>${curator.version}</version>
 			</dependency>
 
 			<dependency>
 				<groupId>org.apache.curator</groupId>
-				<artifactId>curator-recipes</artifactId>
-				<version>${curatorrecipes.version}</version>
+				<artifactId>curator-test</artifactId>
+				<version>${curator.version}</version>
+				<scope>test</scope>
+			</dependency>
+
+			<dependency>
+				<groupId>org.apache.zookeeper</groupId>
+				<artifactId>zookeeper</artifactId>
+				<version>${zookeeper.version}</version>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>
@@ -761,8 +773,6 @@ under the License.
 						<exclude>flink-staging/flink-avro/src/test/java/org/apache/flink/api/io/avro/generated/*.java</exclude>
 						<exclude>flink-staging/flink-language-binding/flink-python/src/test/python/org/apache/flink/languagebinding/api/python/flink/test/data_csv</exclude>
 						<exclude>flink-staging/flink-language-binding/flink-python/src/test/python/org/apache/flink/languagebinding/api/python/flink/test/data_text</exclude>
-						<!-- Python -->						
-						<exclude>flink-staging/flink-language-binding/flink-python/src/main/python/org/apache/flink/languagebinding/api/python/dill/**</exclude>
 						<!-- Configuration Files. -->
 						<exclude>**/flink-bin/conf/slaves</exclude>
 						<exclude>**/flink-bin/conf/masters</exclude>
@@ -815,8 +825,8 @@ under the License.
 				<artifactId>maven-compiler-plugin</artifactId>
 				<version>3.1</version><!--$NO-MVN-MAN-VER$-->
 				<configuration>
-					<source>1.6</source>
-					<target>1.6</target>
+					<source>1.7</source>
+					<target>1.7</target>
 					<!-- The output of Xlint is not show by default, but we activate it for the QA bot
 					to be able to get more warnings -->
 					<compilerArgument>-Xlint:all</compilerArgument>
@@ -902,7 +912,6 @@ under the License.
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-shade-plugin</artifactId>
-				<version>2.3</version>
 				<executions>
 					<execution>
 						<id>shade-flink</id>
@@ -958,6 +967,12 @@ under the License.
 		-->
 		<pluginManagement>
 			<plugins>
+				<!--set maven shade plugin version-->
+				<plugin>
+					<groupId>org.apache.maven.plugins</groupId>
+					<artifactId>maven-shade-plugin</artifactId>
+					<version>2.4.1</version>
+				</plugin>
 				<!--This plugin's configuration is used to store Eclipse m2e settings
 					only. It has no influence on the Maven build itself. -->
 				<plugin>
